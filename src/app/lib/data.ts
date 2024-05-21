@@ -1,5 +1,10 @@
-import { revenue, Invoices, customers } from "@/app/lib/placeholder-data";
+import { sql } from '@vercel/postgres';
+import { 
+  LatestInvoiceRaw,
+  Revenue,
+} from './definitions';
 import { formatCurrency } from "@/app/lib/utils";
+import { unstable_noStore as noStore } from 'next/cache';
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -8,20 +13,16 @@ function sleep(ms: number) {
 export async function fetchRevenue() {
   // Add noStore() here to prevent the response from being cached.
   // This is equivalent to in fetch(..., {cache: 'no-store'}).
-
+  noStore();
   try {
     // Artificially delay a response for demo purposes.
     // Don't do this in production :)
 
-    // console.log('Fetching revenue data...');
-    // await new Promise((resolve) => setTimeout(resolve, 3000));
+    console.log('Fetching revenue data...');
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    console.log("Hello");
-    sleep(10000).then(() => {
-      console.log("World!");
-    });
-
-    const data = revenue;
+    
+    const data = await sql<Revenue>`SELECT * FROM revenue`;
 
     // console.log('Data fetch completed after 3 seconds.');
 
@@ -33,11 +34,16 @@ export async function fetchRevenue() {
 }
 
 export async function fetchLatestInvoices() {
+  noStore();
   try {
-    const data = Invoices;
+    const data = await sql<LatestInvoiceRaw>`
+      SELECT invoices.amount, customers.name, customers.image_url, customers.email, invoices.id
+      FROM invoices
+      JOIN customers ON invoices.customer_id = customers.id
+      ORDER BY invoices.date DESC
+      LIMIT 5`;
 
-    const latestInvoices = data.rows.map((invoice, index) => ({
-      id: index,
+    const latestInvoices = data.rows.map((invoice: { amount: number; }) => ({
       ...invoice,
       amount: formatCurrency(invoice.amount),
     }));
@@ -49,23 +55,28 @@ export async function fetchLatestInvoices() {
 }
 
 export async function fetchCardData() {
+  noStore();
   try {
     // You can probably combine these into a single SQL query
     // However, we are intentionally splitting them to demonstrate
     // how to initialize multiple queries in parallel with JS.
-    const invoiceCountPromise = Invoices.rows.length;
-    const customerCountPromise = customers.rows.length;
-    const invoiceStatus = { pending: 0, paid: 0 };
-    Invoices.rows.map((invoice) => {
-      if (invoice.status == "paid") {
-        invoiceStatus.paid += 1;
-      } else if (invoice.status == "pending") invoiceStatus.pending += 1;
-    });
+    const invoiceCountPromise = sql`SELECT COUNT(*) FROM invoices`;
+    const customerCountPromise = sql`SELECT COUNT(*) FROM customers`;
+    const invoiceStatusPromise = sql`SELECT
+         SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END) AS "paid",
+         SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END) AS "pending"
+         FROM invoices`;
 
-    const numberOfInvoices = Number(invoiceCountPromise ?? "0");
-    const numberOfCustomers = Number(customerCountPromise ?? "0");
-    const totalPaidInvoices = formatCurrency(invoiceStatus.paid ?? "0");
-    const totalPendingInvoices = formatCurrency(invoiceStatus.pending ?? "0");
+    const data = await Promise.all([
+      invoiceCountPromise,
+      customerCountPromise,
+      invoiceStatusPromise,
+    ]);
+
+    const numberOfInvoices = Number(data[0].rows[0].count ?? '0');
+    const numberOfCustomers = Number(data[1].rows[0].count ?? '0');
+    const totalPaidInvoices = formatCurrency(data[2].rows[0].paid ?? '0');
+    const totalPendingInvoices = formatCurrency(data[2].rows[0].pending ?? '0');
 
     return {
       numberOfCustomers,
